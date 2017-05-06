@@ -3,23 +3,46 @@ package bgn4j;
 import javafx.util.Pair;
 import org.neo4j.graphdb.*;
 import org.neo4j.kernel.impl.core.*;
+
+import java.io.IOException;
+import java.net.InetAddress;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Function;
+import java.util.stream.Collector;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 public class Accumulator
 {
+    private InetAddress ips[];
     private List<Pair<Node, List<String>>> nodeSet;
     private Node startNode;
     private List<String> startOperations;
 
     public Accumulator() {
         this.startOperations = new ArrayList<>();
-    };
+        this.setIps();
+    }
 
     public Accumulator(Node startNode, List<String> startOperations)
     {
         this.startNode = startNode;
         this.startOperations = startOperations;
+        this.setIps();
+    }
+
+    public Accumulator(GraphDatabaseService graphdb, List<Pair<Long, List<String>>> nodeIdSet)
+    {
+        Stream<Pair<Long, List<String>>> parallelStream = nodeIdSet.parallelStream();
+        this.nodeSet = parallelStream.map(nodeId -> new Pair<Node, List<String>>(
+                graphdb.getNodeById(nodeId.getKey(), false, (byte) 0), nodeId.getValue())).collect(Collectors.toList());
+        /*for (Pair<Long, List<String>> nodeId : nodeIdSet)
+        {
+            this.nodeSet.add(new Pair<Node, List<String>>(
+                    graphdb.getNodeById(nodeId.getKey(), false, (byte) 0), nodeId.getValue()));
+        }*/
+        this.setIps();
     }
 
     public Accumulator setNodeSet(List<Pair<Node, List<String>>> nodeSet)
@@ -75,9 +98,67 @@ public class Accumulator
                 // if internal do the operations
                 nodeSet.addAll(operate(curPair.getKey(), curPair.getValue()));
         }
-        // TODO add reconcile, this is just for testing
-        finishedNodeSet.addAll(externalNodeSet);
+
+        finishedNodeSet.addAll(reconcile(externalNodeSet));
         return finishedNodeSet;
+    }
+
+    public List<Pair<Node, List<String>>> reconcile(List<Pair<Node, List<String>>> externalNodeSet)
+    {
+        Stream<Pair<Node, List<String>>> externalNodeSetStream = externalNodeSet.parallelStream();
+        List<List<Pair<Long, List<String>>>> machines = new ArrayList<List<Pair<Long, List<String>>>>(5);
+        for (int i = 0; i < 5; i++)
+        {
+            final int num = i;
+            machines.add(externalNodeSetStream
+                            .filter(pair -> ((ExternalNodeProxy) pair.getKey()).getMachineId() == num)
+                            .map(pair -> new Pair<Long, List<String>>(pair.getKey().getId(), pair.getValue()))
+                            .collect(Collectors.toList())
+            );
+        }
+
+        Client clients[] = new Client[5];
+        for (int i = 0; i < 5; i++)
+        {
+            if (machines.get(i).size() != 0)
+            {
+                try
+                {
+                    clients[i] = new Client("localhost", 6067, machines.get(i));
+                    clients[i].start();
+                }
+                catch (IOException e)
+                {
+                    e.printStackTrace();
+                }
+            }
+        }
+
+        for (int i = 0; i < 5; i++)
+        {
+            try
+            {
+                clients[i].join();
+            }
+            catch (InterruptedException e)
+            {
+                e.printStackTrace();
+            }
+        }
+
+        //List<Pair<Long, List<String>>> resultIdSet = new ArrayList<>();
+        List<Pair<Node, List<String>>> resultSet = new ArrayList<>();
+
+        for (int i = 0; i < 5; i++)
+        {
+            final int num = i;
+            Stream<Pair<Long, List<String>>> clientStream = clients[i].getResult().parallelStream();
+            resultSet.addAll(clientStream
+                    .map(pair -> new Pair<Node, List<String>>(new ExternalNodeProxy(num, pair.getKey()), pair.getValue()))
+                    .collect(Collectors.toList()));
+        }
+
+        return resultSet;
     }
 
     public List<Pair<Node, List<String>>> operate(Node node, List<String> operations)
@@ -100,5 +181,24 @@ public class Accumulator
             default: break;
         }
         return nextNodes;
+    }
+
+    private void setIps()
+    {
+        try
+        {
+            this.ips = new InetAddress[]{
+                    InetAddress.getByName("172.22.150.74"), //machine01
+                    InetAddress.getByName("172.22.150.75"), //machine02
+                    InetAddress.getByName("172.22.150.76"),
+                    InetAddress.getByName("172.22.150.77"),
+                    InetAddress.getByName("172.22.150.78")  //machine5
+            };
+
+        }
+        catch (Exception e)
+        {
+            e.printStackTrace();
+        }
     }
 }
