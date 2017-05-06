@@ -124,7 +124,7 @@ public class Accumulator
             {
                 try
                 {
-                    clients[i] = new Client("localhost", 6067, machines.get(i));
+                    clients[i] = new Client(ips[i].getHostName(), 6067, machines.get(i));
                     clients[i].start();
                 }
                 catch (IOException e)

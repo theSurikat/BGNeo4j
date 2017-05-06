@@ -1,3 +1,4 @@
+import com.sun.corba.se.impl.orbutil.graph.Graph;
 import javafx.util.Pair;
 import org.neo4j.graphdb.*;
 import org.neo4j.graphdb.factory.GraphDatabaseFactory;
@@ -15,67 +16,61 @@ import java.util.*;
 public class Main {
     public static void main(String[] args)
     {
-        Node firstNode, secondNode;
-        Relationship relationship, externalRelationship;
-
         String DB_PATH = "BGNeo4j/databases/attempt1/";
         GraphDatabaseService graphDb = new GraphDatabaseFactory().newEmbeddedDatabase( new File(DB_PATH) );
         registerShutdownHook( graphDb );
-        long temp;
-        //Try a transaction
-        try ( Transaction tx = graphDb.beginTx() )
-        {
-            // Database operations go here
-            firstNode = graphDb.createNode();
-            temp = firstNode.getId();
-            firstNode.setProperty( "message", "Hello, " );
-            secondNode = graphDb.createNode();
-            secondNode.setProperty( "message", "World!" );
 
-            relationship = firstNode.createRelationshipTo( secondNode, RelTypes.KNOWS );
-            relationship.setProperty( "message", "brave Neo4j " );
-            externalRelationship = firstNode.createRelationshipTo(19, RelTypes.KNOWS, (byte) 1);
-            secondNode = externalRelationship.getOtherNode(firstNode);
-            System.out.println(secondNode.getClass());
-            System.out.println(((ExternalNodeProxy) secondNode).getMachineId());
-            System.out.println(((ExternalNodeProxy) secondNode).getId());
-            tx.success();
-        }
-
-        try (Transaction tx = graphDb.beginTx())
-        {
-            firstNode = graphDb.getNodeById(temp, false, (byte) 0);
-            System.out.println(firstNode.getId());
-            final Node testNode = firstNode;
-            firstNode.getRelationships().forEach(relationship1 -> {
-
-                Node node = (ExternalNodeProxy)relationship1.getOtherNode(testNode);
-            });
-        }
-
-        /*
-        // Only in machine01 in order to start the request
-        InetAddress localIp = null, targetIp = null;
-        System.out.print("Getting Localhost...");
+        //Which machine are we on?
+        InetAddress localIp = null, machine1 = null, machine2 = null;
+        byte machineId = 2;
+        System.out.print("Getting Localhost and Machine1 and Machine2...");
         try
         {
             localIp = InetAddress.getLocalHost();
-            targetIp = InetAddress.getByName("172.22.150.74");
+            machine1 = InetAddress.getByName("172.22.150.74");
+            machine2 = InetAddress.getByName("172.22.150.75");
+
         }
         catch (Exception e)
         {
             e.printStackTrace();
         }
         System.out.println("complete.");
-        // Check if we are machine 1
+        // Check if we are machine 1 or 2
         System.out.print("Checking if machine 1...");
-        if(Arrays.equals(localIp.getAddress(), targetIp.getAddress()))
+        if(Arrays.equals(localIp.getAddress(), machine1.getAddress()))
         {
-            //Start Accumulator for testing
-            System.out.print("on machine 1...starting accumulator");
-            Accumulator acc = new Accumulator();
+            System.out.print("on machine 1...");
+            machineId = 0;
+
+        }
+        else if(Arrays.equals(localIp.getAddress(), machine2.getAddress()))
+        {
+            System.out.print("on machine 2...setting machine ID");
+            machineId = 1;
         }
         System.out.println("complete.");
+
+        //Initialize the DB based on machine
+        initDb(graphDb, machineId);
+
+        if(machineId == 0)
+        {
+            //Start accumulator if we are machine 1
+            System.out.print("Starting accumulator...");
+            try ( Transaction tx = graphDb.beginTx() )
+            {
+                List<String> startOperations = new ArrayList<String>() {};
+                startOperations.add("friends");
+                Accumulator acc = new Accumulator(graphDb.getNodeById(1, false, (byte) 0), startOperations);
+                acc.run();
+            }
+            catch (Exception e)
+            {
+                e.printStackTrace();
+            }
+            System.out.println("complete.");
+        }
 
         System.out.print("Server starting...");
         try
@@ -88,7 +83,47 @@ public class Main {
         {
             e.printStackTrace();
         }
-        */
+    }
+
+    private static void initDb(GraphDatabaseService graphDb, byte machineId)
+    {
+        Node firstNode, externalNode;
+        Relationship relationship, externalRelationship;
+        long temp;
+
+        //Try a transaction
+        try ( Transaction tx = graphDb.beginTx() )
+        {
+            // Database operations go here
+            firstNode = graphDb.createNode();
+            temp = firstNode.getId();
+            firstNode.setProperty( "message", "Hello, " );
+            //Make the external relationship
+            //Make it to the machine that we are not
+            //This is only for between machine 0 and 1
+            externalRelationship = firstNode.createRelationshipTo(1, RelTypes.KNOWS,
+                    (machineId == (byte) 0) ? (byte) 1 : (byte) 0);
+            externalNode = externalRelationship.getOtherNode(firstNode);
+            System.out.println("External node test print");
+            System.out.println(externalNode.getClass());
+            System.out.println(((ExternalNodeProxy) externalNode).getMachineId());
+            System.out.println(((ExternalNodeProxy) externalNode).getId());
+            tx.success();
+        }
+
+        try (Transaction tx = graphDb.beginTx())
+        {
+            //Get the first node in our database
+            firstNode = graphDb.getNodeById(temp, false, (byte) 0);
+            System.out.print("Got first node: " + firstNode.getId());
+            //Now we get the external Node
+            final Node testNode = firstNode;
+            firstNode.getRelationships().forEach(relationship1 -> {
+                Node node = (ExternalNodeProxy)relationship1.getOtherNode(testNode);
+                System.out.println("External node test print, read from second transaction");
+                System.out.println(((ExternalNodeProxy) node).getMachineId());
+            });
+        }
     }
 
     private static enum RelTypes implements RelationshipType
