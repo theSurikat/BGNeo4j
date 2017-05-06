@@ -2,15 +2,58 @@ import javafx.util.Pair;
 import org.neo4j.graphdb.*;
 import org.neo4j.graphdb.factory.GraphDatabaseFactory;
 import bgn4j.*;
+import org.neo4j.kernel.impl.api.store.RelationshipIterator;
+import org.neo4j.kernel.impl.core.ExternalNodeProxy;
 import org.neo4j.kernel.impl.core.RelationshipProxy;
 
+import javax.management.relation.Relation;
 import java.io.File;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.util.*;
 
 public class Main {
-    public static void main(String[] args) {
+    public static void main(String[] args)
+    {
+        Node firstNode, secondNode;
+        Relationship relationship, externalRelationship;
+
+        String DB_PATH = "BGNeo4j/databases/attempt1/";
+        GraphDatabaseService graphDb = new GraphDatabaseFactory().newEmbeddedDatabase( new File(DB_PATH) );
+        registerShutdownHook( graphDb );
+        long temp;
+        //Try a transaction
+        try ( Transaction tx = graphDb.beginTx() )
+        {
+            // Database operations go here
+            firstNode = graphDb.createNode();
+            temp = firstNode.getId();
+            firstNode.setProperty( "message", "Hello, " );
+            secondNode = graphDb.createNode();
+            secondNode.setProperty( "message", "World!" );
+
+            relationship = firstNode.createRelationshipTo( secondNode, RelTypes.KNOWS );
+            relationship.setProperty( "message", "brave Neo4j " );
+            externalRelationship = firstNode.createRelationshipTo(19, RelTypes.KNOWS, (byte) 1);
+            secondNode = externalRelationship.getOtherNode(firstNode);
+            System.out.println(secondNode.getClass());
+            System.out.println(((ExternalNodeProxy) secondNode).getMachineId());
+            System.out.println(((ExternalNodeProxy) secondNode).getId());
+            tx.success();
+        }
+
+        try (Transaction tx = graphDb.beginTx())
+        {
+            firstNode = graphDb.getNodeById(temp, false, (byte) 0);
+            System.out.println(firstNode.getId());
+            final Node testNode = firstNode;
+            firstNode.getRelationships().forEach(relationship1 -> {
+
+                Node node = (ExternalNodeProxy)relationship1.getOtherNode(testNode);
+            });
+        }
+
+        /*
         // Only in machine01 in order to start the request
         InetAddress localIp = null, targetIp = null;
         System.out.print("Getting Localhost...");
@@ -45,6 +88,27 @@ public class Main {
         {
             e.printStackTrace();
         }
+        */
+    }
+
+    private static enum RelTypes implements RelationshipType
+    {
+        KNOWS
+    }
+
+    private static void registerShutdownHook( final GraphDatabaseService graphDb )
+    {
+        // Registers a shutdown hook for the Neo4j instance so that it
+        // shuts down nicely when the VM exits (even if you "Ctrl-C" the
+        // running application).
+        Runtime.getRuntime().addShutdownHook( new Thread()
+        {
+            @Override
+            public void run()
+            {
+                graphDb.shutdown();
+            }
+        } );
     }
 }
 
